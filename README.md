@@ -34,6 +34,30 @@ from python.org, Homebrew and distro packages).
 Go to <https://my.telegram.org> → *API development tools* → create an app.
 Note the `api_id` and `api_hash`.
 
+### Check them without logging in
+
+From a source checkout (pipx users can skip this and pass `--api-id`/`--api-hash`
+to `login`, or set `TG_API_ID`/`TG_API_HASH`):
+
+```sh
+cp .env.example .env        # then fill TG_API_ID / TG_API_HASH
+python scripts/check_api.py
+```
+
+`scripts/check_api.py` looks for the pair in CLI flags → environment → `.env`
+→ `config.json`, connects to Telegram and proves the pair is accepted by
+requesting a pre-login QR token (it expires unused: no code, message or
+notification is sent). `--save` stores a validated pair in `config.json` so
+`tgsearch-mcp login` and `serve` pick it up, `--json` is for scripts. Exit
+codes: `0` ok, `1` rejected or network error, `2` not configured.
+
+Fill in `.env` like this:
+
+```sh
+TG_API_ID=12345678
+TG_API_HASH=0123456789abcdef0123456789abcdef
+```
+
 ## 2. Log in (one time)
 
 ```sh
@@ -41,7 +65,8 @@ tgsearch-mcp login            # QR: Settings → Devices → Link Desktop Device
 tgsearch-mcp login --phone +79991234567   # phone + code (+ 2FA password)
 ```
 
-You can also pass `--api-id`/`--api-hash`, or set `TG_API_ID`/`TG_API_HASH`.
+You can also pass `--api-id`/`--api-hash`, set `TG_API_ID`/`TG_API_HASH`, or
+run `python scripts/check_api.py --save` first to persist validated ones.
 The session string is stored in `$XDG_CONFIG_HOME/tgsearch-mcp/config.json`
 (`~/.config/tgsearch-mcp/config.json`) with mode `0600`.
 The account shows up in Telegram → *Settings → Devices*; revoke it there or with
@@ -70,12 +95,15 @@ if you installed the package into a specific interpreter.
 No Telegram account needed:
 
 ```sh
-pytest -q                     # unit tests: parsing, FTS5 index, tool catalog
+pytest -q                     # unit tests: parsing, FTS5 index, tool catalog, docs sync
+python scripts/smoke.py       # offline: boots the server over stdio without credentials
 tgsearch-mcp status           # JSON: configured / logged_in / index
-python scripts/verify.py      # boots the server over stdio like a real host
+python scripts/verify.py      # live: boots the server like a real host
 ```
 
-`scripts/verify.py` prints the tool catalog and calls `tg_status`; when the
+`scripts/smoke.py` is what CI runs: empty temp directory, no `TG_*` variables,
+no network — it checks the 9-tool catalog and that `tg_status` degrades softly.
+`scripts/verify.py` prints the same catalog and calls `tg_status`; when the
 session is authorized it also runs find → search → context. Exit codes:
 `0` ok, `1` protocol failure, `2` not logged in yet.
 
@@ -183,11 +211,18 @@ a portable setup), and `TGSEARCH_INDEX` overrides just the index file.
 ```sh
 python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/pytest
+.venv/bin/python scripts/smoke.py
 .venv/bin/tgsearch-mcp status
+.venv/bin/python -m build
 ```
 
-Tests cover query building, formatting/parsing, the FTS5 index and the MCP tool
-catalog; they never touch the network.
+Tests cover query building, formatting/parsing, the FTS5 index, the MCP tool
+catalog and README/AGENTS.md sync; they never touch the network.
+
+Agent rules live in [`AGENTS.md`](AGENTS.md), which OpenCode and VS Code
+Copilot read natively; there are no vendor-specific rule files.
+Releases are tagged `vX.Y.Z` on `main`; `.github/workflows/release.yml` verifies
+the tag and publishes to PyPI via trusted publishing.
 
 ## Security
 

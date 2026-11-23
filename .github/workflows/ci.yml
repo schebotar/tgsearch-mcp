@@ -1,0 +1,81 @@
+# Проверки на каждый pull request и на push в main.
+# Ошибку в workflow иначе видно только в момент релиза — ловим её здесь же.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-and-secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks нужна вся история
+
+      - name: Проверка workflow-файлов
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+      # Ищет секреты в рабочем дереве и во всей истории коммитов.
+      # Для репозиториев в организации задайте секрет GITLEAKS_LICENSE.
+      - name: Поиск утечек
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Зависимости
+        run: python -m pip install -e ".[dev]"
+
+      - name: Тесты
+        run: pytest -q
+
+      - name: Старт сервера по stdio без кредов
+        run: python scripts/smoke.py
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Сборка sdist + wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+
+      - name: Установка колеса в чистое окружение
+        run: |
+          python -m venv /tmp/tgsearch-venv
+          /tmp/tgsearch-venv/bin/pip install --quiet dist/*.whl
+          /tmp/tgsearch-venv/bin/tgsearch-mcp --version
+          /tmp/tgsearch-venv/bin/python -m tgsearch_mcp --version

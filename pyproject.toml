@@ -1,32 +1,56 @@
 [build-system]
-requires = ["hatchling>=1.25"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "tgsearch-mcp"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Read-only Telegram MCP server: chat discovery, fast server-side message search, and an optional local full-text index."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Serghei Cebotari", email = "serghei@cebotari.ru" }]
 keywords = ["mcp", "model-context-protocol", "telegram", "search", "telethon", "ai"]
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Communications :: Chat",
+  "Topic :: Internet",
 ]
 dependencies = [
-    "mcp>=2.3",
-    "pydantic>=2.12",
-    "qrcode>=7.4.2",
-    "telethon>=1.36",
+  "mcp>=2.3",
+  "pydantic>=2.12",
+  "qrcode>=7.4.2",
+  "telethon>=1.36",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+dev = [
+  "build>=1.2",
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "twine>=5",
+]
+
+[project.urls]
+Homepage = "https://github.com/schebotar/tgsearch-mcp"
+Repository = "https://github.com/schebotar/tgsearch-mcp"
+Issues = "https://github.com/schebotar/tgsearch-mcp/issues"
 
 [project.scripts]
 tgsearch-mcp = "tgsearch_mcp.cli:main"
+
+[tool.hatch.version]
+path = "src/tgsearch_mcp/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tgsearch_mcp"]

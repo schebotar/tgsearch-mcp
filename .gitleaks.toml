@@ -1,0 +1,25 @@
+title = "tgsearch-mcp"
+
+# Базовые правила gitleaks плюс послабления для очевидных плейсхолдеров
+# из документации и тестовых заглушек.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Плейсхолдеры документации и артефакты сборки"
+paths = [
+    '''\.venv''',
+    '''dist''',
+    '''build''',
+    '''.*\.egg-info''',
+    '''\.pytest_cache''',
+    '''\.env\.example''',
+    '''index\.sqlite3''',
+]
+regexes = [
+    '''your-company''',
+    '''your-api''',
+    '''example\.invalid''',
+    '''0123456789abcdef0123456789abcdef''',
+    '''pypi-\.\.\.''',
+]
