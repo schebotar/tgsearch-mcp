@@ -28,7 +28,7 @@ jobs:
       # Ищет секреты в рабочем дереве и во всей истории коммитов.
       # Для репозиториев в организации задайте секрет GITLEAKS_LICENSE.
       - name: Поиск утечек
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
