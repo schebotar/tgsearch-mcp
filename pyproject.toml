@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tgsearch-mcp"
+version = "0.1.0"
+description = "Read-only Telegram MCP server: chat discovery, fast server-side message search, and an optional local full-text index."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["mcp", "model-context-protocol", "telegram", "search", "telethon", "ai"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "mcp>=2.3",
+    "pydantic>=2.12",
+    "qrcode>=7.4.2",
+    "telethon>=1.36",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+tgsearch-mcp = "tgsearch_mcp.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tgsearch_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
