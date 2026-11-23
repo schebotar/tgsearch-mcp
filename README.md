@@ -42,7 +42,8 @@ tgsearch-mcp login --phone +79991234567   # phone + code (+ 2FA password)
 ```
 
 You can also pass `--api-id`/`--api-hash`, or set `TG_API_ID`/`TG_API_HASH`.
-The session string is stored in `~/.tgsearch-mcp/config.json` with mode `0600`.
+The session string is stored in `$XDG_CONFIG_HOME/tgsearch-mcp/config.json`
+(`~/.config/tgsearch-mcp/config.json`) with mode `0600`.
 The account shows up in Telegram → *Settings → Devices*; revoke it there or with
 `tgsearch-mcp logout`.
 
@@ -128,10 +129,24 @@ tg_index_chat("@big_channel", limit=20000)   # incremental on later runs
 tg_search_index("шарп коэффициент")          # prefix match, Russian-friendly
 ```
 
-The index lives in `~/.tgsearch-mcp/index.sqlite3` and stores message text.
+The index lives in `$XDG_DATA_HOME/tgsearch-mcp/index.sqlite3`
+(`~/.local/share/tgsearch-mcp/index.sqlite3`) and stores message text.
 Delete it (or set `TGSEARCH_INDEX`) to keep text out of the default location.
 Server-side search remains the primary path — the index is a cache, not a
 mirror, and only covers chats you explicitly indexed.
+
+## Files
+
+Follows the XDG Base Directory spec (`XDG_*` values must be absolute; relative
+values are ignored):
+
+| Path | Contents |
+| --- | --- |
+| `$XDG_CONFIG_HOME/tgsearch-mcp/config.json` | `api_id`/`api_hash`, session string (`0600`) |
+| `$XDG_DATA_HOME/tgsearch-mcp/index.sqlite3` | optional local FTS5 index (`0600`) |
+
+`TGSEARCH_HOME` replaces both directories with a single one (handy for tests or
+a portable setup), and `TGSEARCH_INDEX` overrides just the index file.
 
 ## Configuration
 
@@ -139,8 +154,10 @@ mirror, and only covers chats you explicitly indexed.
 | --- | --- | --- |
 | `TG_API_ID` / `TG_API_HASH` | — | Telegram app credentials |
 | `TG_SESSION_STRING` | — | Session string (overrides `config.json`) |
-| `TGSEARCH_HOME` | `~/.tgsearch-mcp` | Config + index directory |
-| `TGSEARCH_INDEX` | `$TGSEARCH_HOME/index.sqlite3` | Local index path |
+| `XDG_CONFIG_HOME` | `~/.config` | Config base (`…/tgsearch-mcp/config.json`) |
+| `XDG_DATA_HOME` | `~/.local/share` | Data base (`…/tgsearch-mcp/index.sqlite3`) |
+| `TGSEARCH_HOME` | — | Fixed dir for both config and index |
+| `TGSEARCH_INDEX` | `$XDG_DATA_HOME/tgsearch-mcp/index.sqlite3` | Local index path |
 | `TGSEARCH_TIMEOUT` | `60` | Per-request timeout, seconds |
 | `TGSEARCH_DIALOG_LIMIT` | `1000` | Max dialogs fetched per listing |
 | `TGSEARCH_INCLUDE_ARCHIVED` | `true` | Include archived dialogs |
@@ -176,8 +193,8 @@ catalog; they never touch the network.
 
 The session string is a **full credential for your Telegram account** — anyone
 who has it can act as you. It is stored with mode `0600` under
-`~/.tgsearch-mcp`, never logged, and never sent anywhere except Telegram itself.
-Protect it like an SSH key.
+`$XDG_CONFIG_HOME/tgsearch-mcp`, never logged, and never sent anywhere except
+Telegram itself. Protect it like an SSH key.
 
 ## License
 

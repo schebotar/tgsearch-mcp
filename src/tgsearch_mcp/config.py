@@ -9,20 +9,41 @@ from . import __version__
 from .errors import TgSearchError
 
 ENV_HOME = "TGSEARCH_HOME"
+APP_DIR = "tgsearch-mcp"
 
 
-def home_dir() -> Path:
+def _xdg_dir(env_name: str, default_parts: tuple[str, ...]) -> Path:
+    """XDG base dir, ignoring unset/empty/relative values (per the spec)."""
+    raw = os.environ.get(env_name, "").strip()
+    if raw:
+        candidate = Path(raw).expanduser()
+        if candidate.is_absolute():
+            return candidate
+    return Path.home().joinpath(*default_parts)
+
+
+def _override() -> Path | None:
     raw = os.environ.get(ENV_HOME, "").strip()
-    return Path(raw).expanduser() if raw else Path.home() / ".tgsearch-mcp"
+    return Path(raw).expanduser() if raw else None
+
+
+def config_dir() -> Path:
+    """$XDG_CONFIG_HOME/tgsearch-mcp (TGSEARCH_HOME overrides both dirs)."""
+    return _override() or _xdg_dir("XDG_CONFIG_HOME", (".config",)) / APP_DIR
+
+
+def data_dir() -> Path:
+    """$XDG_DATA_HOME/tgsearch-mcp (TGSEARCH_HOME overrides both dirs)."""
+    return _override() or _xdg_dir("XDG_DATA_HOME", (".local", "share")) / APP_DIR
 
 
 def config_path() -> Path:
-    return home_dir() / "config.json"
+    return config_dir() / "config.json"
 
 
 def index_path() -> Path:
     raw = os.environ.get("TGSEARCH_INDEX", "").strip()
-    return Path(raw).expanduser() if raw else home_dir() / "index.sqlite3"
+    return Path(raw).expanduser() if raw else data_dir() / "index.sqlite3"
 
 
 @dataclass
@@ -128,13 +149,12 @@ def load_config() -> Config:
 
 
 def save_config(cfg: Config) -> None:
-    home = home_dir()
-    home.mkdir(parents=True, exist_ok=True)
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        os.chmod(home, 0o700)
+        os.chmod(path.parent, 0o700)
     except OSError:
         pass
-    path = config_path()
     tmp = path.with_name(path.name + ".tmp")
     payload = json.dumps(asdict(cfg), indent=2, sort_keys=True) + "\n"
     tmp.write_text(payload, encoding="utf-8")

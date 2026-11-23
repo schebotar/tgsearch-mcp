@@ -69,3 +69,58 @@ def test_require_api_raises_with_hint():
         Config().require_api()
     assert excinfo.value.code == "not_configured"
     assert "my.telegram.org" in (excinfo.value.hint or "")
+
+
+def test_xdg_layout_without_tgsearch_home(monkeypatch, tmp_path):
+    from tgsearch_mcp.config import config_path, index_path
+
+    monkeypatch.delenv("TGSEARCH_HOME")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    assert config_path() == tmp_path / "cfg" / "tgsearch-mcp" / "config.json"
+    assert index_path() == tmp_path / "data" / "tgsearch-mcp" / "index.sqlite3"
+
+
+def test_relative_xdg_values_are_ignored(monkeypatch, tmp_path):
+    from tgsearch_mcp.config import config_path, index_path
+
+    monkeypatch.delenv("TGSEARCH_HOME")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", "relative/cfg")
+    monkeypatch.setenv("XDG_DATA_HOME", "")
+
+    assert config_path() == tmp_path / ".config" / "tgsearch-mcp" / "config.json"
+    assert index_path() == tmp_path / ".local" / "share" / "tgsearch-mcp" / "index.sqlite3"
+
+
+def test_tgsearch_home_overrides_xdg(monkeypatch, tmp_path):
+    from tgsearch_mcp.config import config_path, index_path
+
+    monkeypatch.setenv("TGSEARCH_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+
+    assert config_path() == tmp_path / "home" / "config.json"
+    assert index_path() == tmp_path / "home" / "index.sqlite3"
+
+
+def test_index_path_env_override(monkeypatch, tmp_path):
+    from tgsearch_mcp.config import index_path
+
+    monkeypatch.setenv("TGSEARCH_INDEX", str(tmp_path / "custom.sqlite3"))
+    assert index_path() == tmp_path / "custom.sqlite3"
+
+
+def test_save_config_creates_private_xdg_dir(monkeypatch, tmp_path):
+    import stat
+
+    monkeypatch.delenv("TGSEARCH_HOME")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+
+    save_config(Config(api_id=7, api_hash="h", session="s"))
+
+    path = tmp_path / "cfg" / "tgsearch-mcp" / "config.json"
+    assert path.exists()
+    assert stat.S_IMODE((tmp_path / "cfg" / "tgsearch-mcp").stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
