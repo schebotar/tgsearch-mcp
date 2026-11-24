@@ -147,10 +147,15 @@ def _cmd_serve(_args: argparse.Namespace) -> int:
     mcp.run("stdio")
     return 0
 
+def _cmd_setup(args: argparse.Namespace) -> int:
+    from .onboarding import run_setup
+
+    return run_setup(port=args.port, open_browser=not args.no_browser)
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tgsearch-mcp",
-        description="Read-only Telegram search MCP server (stdio).",
+        description="Read-only Telegram search MCP server (stdio) plus a local setup page.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
@@ -167,6 +172,14 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="Print login and index status as JSON.")
     status.set_defaults(func=_cmd_status)
 
+    setup = sub.add_parser(
+        "setup",
+        help="Open a local web page: QR login in the browser plus a client config.",
+    )
+    setup.add_argument("--port", type=int, default=8765, help="loopback port (default: 8765)")
+    setup.add_argument("--no-browser", action="store_true", help="do not open a browser")
+    setup.set_defaults(func=_cmd_setup)
+
     serve = sub.add_parser("serve", help="Run the MCP server over stdio (default).")
     serve.set_defaults(func=_cmd_serve)
     return parser
@@ -176,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not getattr(args, "command", None) or args.command == "serve":
         return _cmd_serve(args)
+    if args.command == "setup":
+        return _cmd_setup(args)
     try:
         return asyncio.run(args.func(args))
     except KeyboardInterrupt:

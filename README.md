@@ -29,6 +29,24 @@ pipx install tgsearch-mcp     # or: uv tool install tgsearch-mcp
 Requires Python ≥ 3.10 and a Python build with SQLite FTS5 (default on CPython
 from python.org, Homebrew and distro packages).
 
+## Quick start (browser)
+
+```sh
+tgsearch-mcp setup
+```
+
+Opens <http://127.0.0.1:8765> in your browser. The page walks through the app
+credentials, shows the QR code as an image, asks for the two-step password when
+the account has one, and ends with a ready-made config for OpenCode, Claude Code,
+Claude Desktop or Cursor.
+
+The page listens on loopback only, is protected by a one-time key printed in
+the terminal, and writes nothing until the login finishes. It speaks Russian and
+English (the `RU`/`EN` switch is in the corner; the first visit follows the
+browser language). Use `--port` when 8765 is busy and `--no-browser` over SSH
+(then forward the port: `ssh -L 8765:127.0.0.1:8765 <host>`). The terminal flow
+below does the same thing without a browser.
+
 ## 1. Create a Telegram app (one time)
 
 Go to <https://my.telegram.org> → *API development tools* → create an app.
@@ -73,6 +91,35 @@ The account shows up in Telegram → *Settings → Devices*; revoke it there or 
 `tgsearch-mcp logout`.
 
 ## 3. Register the server
+
+**OpenCode (V2 config, `opencode.json`):**
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "telegram": {
+        "type": "local",
+        "command": ["tgsearch-mcp", "serve"]
+      }
+    }
+  }
+}
+```
+
+The same from the CLI: `opencode mcp add telegram -- tgsearch-mcp serve`
+(add `--global` to make it available in every project).
+
+**Codex (`~/.codex/config.toml`, or `.codex/config.toml` in a project):**
+
+```toml
+[mcp_servers.telegram]
+command = "tgsearch-mcp"
+args = ["serve"]
+```
+
+Or from the CLI: `codex mcp add telegram -- tgsearch-mcp serve`.
 
 **Claude Code / Claude Desktop / VS Code / any `mcpServers` host:**
 
@@ -230,6 +277,12 @@ The session string is a **full credential for your Telegram account** — anyone
 who has it can act as you. It is stored with mode `0600` under
 `$XDG_CONFIG_HOME/tgsearch-mcp`, never logged, and never sent anywhere except
 Telegram itself. Protect it like an SSH key.
+
+`tgsearch-mcp setup` binds to `127.0.0.1` only and requires the one-time key it
+prints in the terminal, so another page open in the same browser cannot drive
+the login. The page never returns the session string: it only reports the
+account, and the terminal keeps showing `config.json` untouched until the login
+completes. The two-step password is used once and not stored.
 
 ## License
 

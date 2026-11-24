@@ -22,6 +22,9 @@ Read-only Telegram search для MCP-хостов: поиск чата, серв
   При отладке проверяй только «задан / не задан».
 - **Значения из конфига — не в stdout MCP-сервера.** stdout занят протоколом;
   диагностика идёт в stderr.
+- **Страница `setup` — только loopback и только со своим ключом.** Она
+  слушает `127.0.0.1`, требует одноразовый ключ из терминала и никогда не
+  отдаёт session string в JSON. Пароль 2FA живёт в памяти один вызов.
 - **Тесты не ходят в сеть.** Живые проверки — отдельные скрипты
   (`scripts/verify.py`, `scripts/check_api.py`), их не запускает pytest.
 - **Документация описывает текущую сборку.** Состав инструментов, числа и
@@ -38,6 +41,7 @@ Python ≥ 3.10, `mcp` (stdio), `telethon`, `pydantic`, `qrcode`, hatchling.
 .venv/bin/python scripts/verify.py         # живой find → search → context (нужен login)
 .venv/bin/python scripts/check_api.py      # проверка api_id/api_hash без входа
 .venv/bin/tgsearch-mcp status              # JSON: конфиг, логин, индекс
+.venv/bin/tgsearch-mcp setup               # локальная страница: QR в браузере
 .venv/bin/python -m build                  # sdist + wheel
 ```
 
@@ -47,7 +51,8 @@ Python ≥ 3.10, `mcp` (stdio), `telethon`, `pydantic`, `qrcode`, hatchling.
 
 | Файл | Ответственность |
 | --- | --- |
-| `src/tgsearch_mcp/cli.py` | `login` (QR/телефон), `logout`, `status`, `serve`; argparse-граница |
+| `src/tgsearch_mcp/cli.py` | `login` (QR/телефон), `logout`, `status`, `setup`, `serve`; argparse-граница |
+| `src/tgsearch_mcp/onboarding.py` | Локальная веб-страница входа: QR, 2FA, сниппеты клиентов |
 | `src/tgsearch_mcp/server.py` | `MCPServer`, 9 инструментов, тонкие обёртки над `TelegramService` |
 | `src/tgsearch_mcp/telegram.py` | Telethon-клиент, поиск, история, топики, индексация, `status()` |
 | `src/tgsearch_mcp/config.py` | `config.json`, env, XDG-пути, права `0600` |

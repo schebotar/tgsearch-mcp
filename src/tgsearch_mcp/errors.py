@@ -39,6 +39,8 @@ _ERRORS: tuple[tuple[type[BaseException], str, str | None], ...] = (
     (errors.FloodWaitError, "flood_wait", "Telegram rate limit hit. Wait and retry; reduce the request rate or the requested range."),
     (errors.FloodPremiumWaitError, "flood_wait", "Telegram rate limit hit for this peer. Wait and retry."),
     (errors.SessionPasswordNeededError, "2fa_required", "This account has two-step verification. Run `tgsearch-mcp login` and enter the password."),
+    (errors.ApiIdInvalidError, "api_id_invalid", "Telegram rejected the api_id/api_hash pair. Create an app at https://my.telegram.org and copy both values from the same app."),
+    (errors.ApiIdPublishedFloodError, "api_id_published", "This api_id is published/leaked. Create a new app at https://my.telegram.org."),
     (errors.AuthKeyUnregisteredError, "session_invalid", "The session was revoked or is unknown to Telegram. Run `tgsearch-mcp login` again."),
     (errors.AuthKeyDuplicatedError, "session_invalid", "The session was used from another place and revoked. Run `tgsearch-mcp login` again."),
     (errors.SessionExpiredError, "session_invalid", "The session expired. Run `tgsearch-mcp login` again."),

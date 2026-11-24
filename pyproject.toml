@@ -30,7 +30,9 @@ dependencies = [
   "mcp>=2.3",
   "pydantic>=2.12",
   "qrcode>=7.4.2",
+  "starlette>=0.48",
   "telethon>=1.36",
+  "uvicorn>=0.31",
 ]
 
 [project.optional-dependencies]
