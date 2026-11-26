@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from telethon import TelegramClient, errors, functions, types, utils
@@ -21,12 +21,14 @@ from .formatting import (
     chat_username,
     entity_maps,
     is_message,
+    iso,
     message_entry,
     parse_date,
     sender_name,
     sender_peer_id,
     topic_entry,
     topic_id_of,
+    user_entry,
 )
 from .index import MessageIndex
 
@@ -51,6 +53,14 @@ def clamp(value: int, low: int, high: int) -> int:
     except (TypeError, ValueError):
         value = low
     return max(low, min(high, value))
+
+
+def _participant_role(participant: Any) -> str | None:
+    if isinstance(participant, (types.ChannelParticipantCreator, types.ChatParticipantCreator)):
+        return "creator"
+    if isinstance(participant, (types.ChannelParticipantAdmin, types.ChatParticipantAdmin)):
+        return "admin"
+    return None
 
 
 def normalize_chat_ref(ref: str) -> str | int:
@@ -322,16 +332,31 @@ class TelegramService:
         scope: str = "all",
         limit: int = 20,
         refresh: bool = False,
+        active_within_days: int | None = None,
+        sort: str = "relevance",
     ) -> dict[str, Any]:
         if scope not in {"all", "dialogs", "public"}:
             raise TgSearchError("invalid_argument", "scope must be one of: all, dialogs, public.")
+        if sort not in {"relevance", "activity"}:
+            raise TgSearchError(
+                "invalid_argument", "sort must be one of: relevance, activity."
+            )
         limit = clamp(limit, 1, 50)
+        days = None if active_within_days is None else clamp(active_within_days, 0, 3650)
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=days) if days is not None else None
+        )
         needle = (query or "").strip()
         folded = needle.casefold()
         dialogs = await self.dialogs(refresh=refresh)
         ranked = []
         if scope in {"all", "dialogs"}:
             for dialog, archived in dialogs:
+                last_date = dialog.date
+                if last_date is not None and last_date.tzinfo is None:
+                    last_date = last_date.replace(tzinfo=timezone.utc)
+                if cutoff is not None and (last_date is None or last_date < cutoff):
+                    continue
                 entity = dialog.entity
                 title = chat_title(entity)
                 username = chat_username(entity) or ""
@@ -342,12 +367,23 @@ class TelegramService:
                 ):
                     continue
                 rank = _rank(folded, title, username, dialog.id)
-                date = dialog.date or datetime.min.replace(tzinfo=timezone.utc)
-                entry = chat_entry(entity, source="dialogs", is_member=True, archived=archived)
+                last_message = getattr(dialog, "message", None)
+                entry = chat_entry(
+                    entity,
+                    source="dialogs",
+                    is_member=True,
+                    archived=archived,
+                    last_message_date=iso(last_date),
+                    last_message_id=getattr(last_message, "id", None),
+                )
                 if dialog.unread_count:
                     entry["unread"] = dialog.unread_count
-                ranked.append((rank, -date.timestamp(), entry))
-        ranked.sort(key=lambda item: (item[0], item[1]))
+                sort_date = last_date or datetime.min.replace(tzinfo=timezone.utc)
+                ranked.append((rank, sort_date.timestamp(), entry))
+        if sort == "activity":
+            ranked.sort(key=lambda item: (-item[1], item[0]))
+        else:
+            ranked.sort(key=lambda item: (item[0], -item[1]))
         results = [item[2] for item in ranked[:limit]]
 
         public_error = None
@@ -370,8 +406,11 @@ class TelegramService:
             "ok": True,
             "query": query or "",
             "count": len(results),
+            "sort": sort,
             "chats": results,
         }
+        if days is not None:
+            response["active_within_days"] = days
         if public_error:
             response["public_search_error"] = public_error
         if scope == "public" and not needle:
@@ -439,6 +478,173 @@ class TelegramService:
             }
             entry.update({key: value for key, value in extra.items() if value})
         return {"ok": True, "chat": entry}
+
+    def _members_hidden(self, entity: Any, reason: str) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "chat": chat_entry(entity),
+            "count": 0,
+            "members": [],
+            "participants_hidden": True,
+            "note": f"{reason} tg_get_chat still reports the member count.",
+        }
+
+    async def chat_members(
+        self,
+        chat: str,
+        query: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        entity = await self.resolve(chat)
+        limit = clamp(limit, 1, 200)
+        offset = max(0, int(offset or 0))
+        needle = (query or "").strip()
+        next_offset = None
+        total = None
+        if isinstance(entity, types.Channel):
+            try:
+                result = await self._run(
+                    lambda client: client(
+                        functions.channels.GetParticipantsRequest(
+                            channel=entity,
+                            filter=types.ChannelParticipantsSearch(q=needle),
+                            offset=offset,
+                            limit=limit,
+                            hash=0,
+                        )
+                    )
+                )
+            except (errors.ChatAdminRequiredError, errors.ChannelPrivateError):
+                return self._members_hidden(
+                    entity,
+                    "Telegram does not expose the member list of this chat to this account.",
+                )
+            users, _ = entity_maps(result.users, result.chats)
+            participants = list(result.participants or [])
+            members = []
+            for participant in participants:
+                user_id = getattr(participant, "user_id", None)
+                if user_id is None:
+                    peer = getattr(participant, "peer", None)
+                    user_id = chat_id(peer) if isinstance(peer, types.PeerUser) else None
+                if user_id is None:
+                    continue
+                members.append(
+                    user_entry(
+                        users.get(int(user_id)),
+                        user_id=int(user_id),
+                        role=_participant_role(participant),
+                    )
+                )
+            total = getattr(result, "count", None)
+            if total is not None:
+                if offset + len(participants) < total:
+                    next_offset = offset + len(participants)
+            elif len(participants) >= limit:
+                next_offset = offset + len(participants)
+        elif isinstance(entity, types.Chat):
+            full = await self._run(
+                lambda client: client(functions.messages.GetFullChatRequest(chat_id=entity.id))
+            )
+            full_chat = full.full_chat
+            items = getattr(getattr(full_chat, "participants", None), "participants", None)
+            if items is None:
+                return self._members_hidden(
+                    entity,
+                    "Telegram does not expose the member list of this group to this account.",
+                )
+            users, _ = entity_maps(getattr(full, "users", None), getattr(full, "chats", None))
+            folded = needle.casefold()
+            selected = []
+            for item in items:
+                user_id = int(getattr(item, "user_id", 0) or 0)
+                user = users.get(user_id)
+                if folded:
+                    haystack = " ".join(
+                        part
+                        for part in (
+                            chat_title(user) if user is not None else "",
+                            chat_username(user) if user is not None else "",
+                            str(user_id),
+                        )
+                        if part
+                    ).casefold()
+                    if folded not in haystack:
+                        continue
+                selected.append((item, user_id, user))
+            total = len(selected)
+            page = selected[offset : offset + limit]
+            members = [
+                user_entry(user, user_id=user_id, role=_participant_role(item))
+                for item, user_id, user in page
+            ]
+            if offset + len(page) < total:
+                next_offset = offset + len(page)
+        else:
+            return {
+                "ok": True,
+                "chat": chat_entry(entity),
+                "count": 0,
+                "members": [],
+                "note": "Only groups and supergroups have member lists.",
+            }
+        response: dict[str, Any] = {
+            "ok": True,
+            "chat": chat_entry(entity),
+            "count": len(members),
+            "members": members,
+        }
+        if total is not None:
+            response["total"] = total
+        if next_offset is not None:
+            response["next_offset"] = next_offset
+        if not members:
+            response["note"] = (
+                "No members matched. Telegram only exposes the users it shows to this account."
+            )
+        return response
+
+    async def list_contacts(
+        self,
+        query: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        include_phones: bool = False,
+    ) -> dict[str, Any]:
+        result = await self._run(
+            lambda client: client(functions.contacts.GetContactsRequest(hash=0))
+        )
+        users = [user for user in result.users if isinstance(user, types.User)]
+        needle = (query or "").strip().casefold()
+        if needle:
+            users = [
+                user
+                for user in users
+                if needle in (chat_title(user) or "").casefold()
+                or needle in (chat_username(user) or "").casefold()
+                or needle in str(user.id)
+            ]
+        users.sort(key=lambda user: (chat_title(user) or "").casefold())
+        limit = clamp(limit, 1, 500)
+        offset = max(0, int(offset or 0))
+        total = len(users)
+        page = users[offset : offset + limit]
+        contacts = [user_entry(user, include_phone=include_phones) for user in page]
+        response: dict[str, Any] = {
+            "ok": True,
+            "query": query or "",
+            "total": total,
+            "returned": len(contacts),
+            "contacts": contacts,
+        }
+        if offset + len(page) < total:
+            response["next_offset"] = offset + len(page)
+        if not contacts:
+            response["note"] = (
+                "No contacts matched. This is the account's contact list, not chat members."
+            )
+        return response
 
     async def list_topics(
         self,
@@ -829,6 +1035,11 @@ class TelegramService:
                 if message.id <= min_id:
                     continue
                 text = (message.message or "")[:text_limit]
+                topic = topic_id_of(message)
+                reply = getattr(message, "reply_to", None)
+                reply_id = getattr(reply, "reply_to_msg_id", None) if reply is not None else None
+                if reply_id and reply_id == topic:
+                    reply_id = None
                 rows.append(
                     {
                         "chat_id": chat_id_value,
@@ -838,7 +1049,8 @@ class TelegramService:
                         "sender_name": sender_name(message, users, chats, chat_title(entity)),
                         "text": text,
                         "has_media": 1 if message.media is not None else 0,
-                        "topic_id": topic_id_of(message),
+                        "topic_id": topic,
+                        "reply_to_msg_id": reply_id,
                     }
                 )
             if rows:
@@ -872,29 +1084,66 @@ class TelegramService:
         self,
         query: str,
         chat: str | None = None,
+        chats: list[str] | None = None,
         limit: int = 20,
         mode: str = "auto",
+        min_date: str | None = None,
+        max_date: str | None = None,
+        sender: str | None = None,
+        has_media: bool = False,
+        topic_id: int | None = None,
+        sort: str = "relevance",
     ) -> dict[str, Any]:
         index = self.index
+        refs = [ref for ref in ([chat] if chat else []) + list(chats or []) if ref]
+        chat_ids: list[int] = []
+        unresolved: list[str] = []
         chat_entity = None
-        chat_id_value = None
-        if chat:
+        for ref in refs:
+            resolved = None
             try:
-                chat_entity = await self.resolve(chat)
-                chat_id_value = chat_id(chat_entity)
+                entity = await self.resolve(ref)
+                resolved = chat_id(entity)
+                if resolved is not None and chat_entity is None:
+                    chat_entity = entity
             except Exception:
-                chat_id_value = index.find_chat(chat)
-                if chat_id_value is None:
-                    raise
-        try:
-            results = index.search(
-                query,
-                chat_id=chat_id_value,
-                limit=clamp(limit, 1, 100),
-                mode=mode,
+                # Offline, rate-limited or unknown ref: fall back to the local index.
+                pass
+            if resolved is None:
+                resolved = index.find_chat(str(ref))
+            if resolved is None:
+                unresolved.append(str(ref))
+            elif resolved not in chat_ids:
+                chat_ids.append(resolved)
+        if refs and not chat_ids:
+            raise TgSearchError(
+                "chat_not_found",
+                f"No indexed chat matches: {', '.join(unresolved)}",
+                "Run tg_index_chat for that chat first, or omit `chats` to search every indexed chat.",
             )
+        try:
+            min_dt = parse_date(min_date)
+            max_dt = parse_date(max_date, end_of_day=True)
+        except ValueError as exc:
+            raise TgSearchError("invalid_argument", str(exc)) from exc
+        options: dict[str, Any] = {
+            "chat_ids": chat_ids or None,
+            "limit": clamp(limit, 1, 100),
+            "min_ts": int(min_dt.timestamp()) if min_dt else None,
+            "max_ts": int(max_dt.timestamp()) if max_dt else None,
+            "sender": sender,
+            "has_media": bool(has_media),
+            "topic_id": topic_id,
+            "sort": sort,
+        }
+        try:
+            results = index.search(query, mode=mode, **options)
         except ValueError as exc:
             raise TgSearchError("invalid_query", str(exc)) from exc
+        relaxed = False
+        if not results and mode == "auto":
+            results = index.search(query, mode="any", **options)
+            relaxed = bool(results)
         response: dict[str, Any] = {
             "ok": True,
             "query": query,
@@ -902,9 +1151,19 @@ class TelegramService:
             "results": results,
             "index": index.stats(),
         }
-        if chat_entity is not None:
+        if chat_entity is not None and len(refs) == 1:
             response["chat"] = chat_entry(chat_entity)
-        if not results:
+        if len(refs) > 1:
+            response["chat_ids"] = chat_ids
+        if unresolved:
+            response["unresolved_chats"] = unresolved
+        if relaxed:
+            response["relaxed"] = True
+            response["note"] = (
+                "No message matched every word: results are OR-matched, so check them "
+                "before relying on them."
+            )
+        elif not results:
             response["note"] = (
                 "No local matches. This chat may not be indexed yet: run tg_index_chat, "
                 "or use tg_search_messages for server-side Telegram search."

@@ -251,6 +251,34 @@ def message_entry(
     return entry
 
 
+def user_entry(
+    user: Any,
+    *,
+    user_id: int | None = None,
+    role: str | None = None,
+    include_phone: bool = False,
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {"user_id": user_id if user_id is not None else chat_id(user)}
+    name = chat_title(user) if user is not None else None
+    if name:
+        entry["name"] = name
+    username = chat_username(user) if user is not None else None
+    if username:
+        entry["username"] = username
+    if getattr(user, "bot", False):
+        entry["bot"] = True
+    if getattr(user, "deleted", False):
+        entry["deleted"] = True
+    if getattr(user, "verified", False):
+        entry["verified"] = True
+    if role:
+        entry["role"] = role
+    phone = getattr(user, "phone", None)
+    if include_phone and phone:
+        entry["phone"] = phone
+    return entry
+
+
 def chat_entry(
     entity: Any,
     *,
@@ -259,6 +287,8 @@ def chat_entry(
     archived: bool | None = None,
     about: str | None = None,
     members: int | None = None,
+    last_message_date: str | None = None,
+    last_message_id: int | None = None,
 ) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "chat_id": chat_id(entity),
@@ -288,6 +318,10 @@ def chat_entry(
         entry["source"] = source
     if about:
         entry["about"] = about
+    if last_message_date:
+        entry["last_message_date"] = last_message_date
+    if last_message_id:
+        entry["last_message_id"] = int(last_message_id)
     return entry
 
 

@@ -53,11 +53,11 @@ Python ≥ 3.10, `mcp` (stdio), `telethon`, `pydantic`, `qrcode`, hatchling.
 | --- | --- |
 | `src/tgsearch_mcp/cli.py` | `login` (QR/телефон), `logout`, `status`, `setup`, `serve`; argparse-граница |
 | `src/tgsearch_mcp/onboarding.py` | Локальная веб-страница входа: QR, 2FA, сниппеты клиентов |
-| `src/tgsearch_mcp/server.py` | `MCPServer`, 9 инструментов, тонкие обёртки над `TelegramService` |
-| `src/tgsearch_mcp/telegram.py` | Telethon-клиент, поиск, история, топики, индексация, `status()` |
+| `src/tgsearch_mcp/server.py` | `MCPServer`, 11 инструментов, тонкие обёртки над `TelegramService` |
+| `src/tgsearch_mcp/telegram.py` | Telethon-клиент, поиск, история, топики, участники, контакты, индексация, `status()` |
 | `src/tgsearch_mcp/config.py` | `config.json`, env, XDG-пути, права `0600` |
-| `src/tgsearch_mcp/index.py` | SQLite FTS5-кэш сообщений |
-| `src/tgsearch_mcp/formatting.py` | нормализация entity/message в JSON-словари |
+| `src/tgsearch_mcp/index.py` | SQLite FTS5-кэш сообщений: кросс-чат фильтры, `reply_to`, миграции |
+| `src/tgsearch_mcp/formatting.py` | нормализация entity/user/message в JSON-словари |
 | `src/tgsearch_mcp/query.py` | построение FTS-запроса |
 | `src/tgsearch_mcp/errors.py` | `TgSearchError` → структурированный payload |
 | `scripts/smoke.py` | CI-проба: каталог + `tg_status` без сети и кредов |
@@ -70,20 +70,22 @@ Python ≥ 3.10, `mcp` (stdio), `telethon`, `pydantic`, `qrcode`, hatchling.
 
 ## Каталог инструментов
 
-В сборке ровно **9** инструментов; список сверяется тестом `tests/test_docs.py`
-с README и с `EXPECTED_TOOLS` в `scripts/verify.py`.
+В сборке ровно **11** инструментов; список сверяется тестом `tests/test_docs.py`
+с README и с `EXPECTED_TOOLS` в `scripts/verify.py` и `scripts/smoke.py`.
 
 | Инструмент | Назначение |
 | --- | --- |
 | `tg_status` | Конфиг, логин, аккаунт, индекс. Никогда не падает. |
-| `tg_find_chats` | Диалоги + публичный каталог; возвращает `ref`. |
+| `tg_find_chats` | Диалоги + публичный каталог; `last_message_date`, `sort=activity`. |
 | `tg_get_chat` | About, участники, закреп, forum-флаг, ссылка. |
+| `tg_get_chat_members` | Участники группы: `user_id`, имя, username, роль. |
+| `tg_list_contacts` | Свои контакты аккаунта (телефоны только по запросу). |
 | `tg_list_topics` | Топики супергруппы (forum). |
 | `tg_search_messages` | Серверный поиск внутри чата (`messages.search`). |
 | `tg_search_global` | Поиск по доступным аккаунту чатам (`searchGlobal`). |
 | `tg_get_messages` | История по `ids` / `before_id` / `after_id` / `around_id`. |
 | `tg_index_chat` | Построить/обновить локальный FTS5-индекс чата. |
-| `tg_search_index` | Локальный поиск по индексу, в том числе офлайн. |
+| `tg_search_index` | Локальный поиск по всем индексированным чатам, фильтры, OR-fallback. |
 
 Выключенных модулей нет. Если инструмент «есть в коде, но агент его не
 вызывает» — сверься с этой таблицей и `tests/test_server.py`.
@@ -92,8 +94,10 @@ Python ≥ 3.10, `mcp` (stdio), `telethon`, `pydantic`, `qrcode`, hatchling.
 
 Приоритет для `api_id`/`api_hash`/`session`: **env → `config.json`**;
 `TGSEARCH_HOME` подменяет оба XDG-каталога, `TGSEARCH_INDEX` — только файл
-индекса. `./.env` читает **только** `scripts/check_api.py`; сам сервер `.env`
-не парсит (переменные должны быть экспортированы).
+индекса. Второй аккаунт — это второй `TGSEARCH_HOME` и второй MCP-сервер в
+клиенте; профилей внутри одного процесса нет. `./.env` читает **только**
+`scripts/check_api.py`; сам сервер `.env` не парсит (переменные должны быть
+экспортированы).
 
 | Путь | Содержимое |
 | --- | --- |
@@ -127,18 +131,19 @@ Python ≥ 3.10, `mcp` (stdio), `telethon`, `pydantic`, `qrcode`, hatchling.
    возвращает `_safe(...)`.
 3. Тест в `tests/test_server.py` (каталог) или `tests/test_service.py`
    (поведение) — без сети.
-4. Обнови **три места**: таблицу в `README.md`, таблицу в этом файле и
-   `EXPECTED_TOOLS` в `scripts/verify.py`, если меняется число инструментов.
+4. Обнови **четыре места**: таблицу в `README.md`, таблицу в этом файле и
+   `EXPECTED_TOOLS` в `scripts/verify.py` и `scripts/smoke.py`, если меняется
+   число инструментов.
 5. Если меняется поведение — строка в `CHANGELOG.md`.
 
-`tests/test_docs.py` упадёт, если README, `AGENTS.md`, `verify.py` и реальный
-каталог разойдутся.
+`tests/test_docs.py` упадёт, если README, `AGENTS.md`, `scripts/verify.py`,
+`scripts/smoke.py` и реальный каталог разойдутся.
 
 ## Тесты и проверки
 
 - `tests/` — только офлайн: tmp-каталоги, `TGSEARCH_HOME`, мок-сервисы.
 - `scripts/smoke.py` — запускает сервер по stdio из временного каталога без
-  кредов: 9 инструментов, `tg_status.ok`, `configured=false`. Это то, что
+  кредов: 11 инструментов, `tg_status.ok`, `configured=false`. Это то, что
   гоняет CI.
 - `scripts/verify.py` — после `login`: каталог, `tg_status`, find → search →
   context. Exit `2` = ещё не авторизован.

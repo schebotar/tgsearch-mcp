@@ -149,7 +149,7 @@ python scripts/verify.py      # live: boots the server like a real host
 ```
 
 `scripts/smoke.py` is what CI runs: empty temp directory, no `TG_*` variables,
-no network — it checks the 9-tool catalog and that `tg_status` degrades softly.
+no network — it checks the 11-tool catalog and that `tg_status` degrades softly.
 `scripts/verify.py` prints the same catalog and calls `tg_status`; when the
 session is authorized it also runs find → search → context. Exit codes:
 `0` ok, `1` protocol failure, `2` not logged in yet.
@@ -171,17 +171,19 @@ that is exactly what the script does.
 | Tool | What it does |
 | --- | --- |
 | `tg_status` | Config, login, account and index health. Never errors. Start here. |
-| `tg_find_chats` | Search your dialogs and the public directory. Returns `ref` for other tools. |
+| `tg_find_chats` | Search your dialogs and the public directory; carries `last_message_date` and supports `sort="activity"`. |
 | `tg_get_chat` | About, members, pinned message, forum flag, link, restrictions. |
+| `tg_get_chat_members` | Group/supergroup members with `user_id`, name, username and role. |
+| `tg_list_contacts` | The account's own contact list (name filter, phones opt-in). |
 | `tg_list_topics` | Forum topics of a supergroup (with `topic_id`). |
 | `tg_search_messages` | **Server-side search inside one chat**: query, kind, dates, sender, topic. |
 | `tg_search_global` | Search across every chat the account can see. |
 | `tg_get_messages` | History by `ids` / `before_id` / `after_id` / `around_id`. |
 | `tg_index_chat` | Build/refresh the optional local FTS5 index for one chat. |
-| `tg_search_index` | Instant local search over indexed chats (works offline). |
+| `tg_search_index` | Local search across indexed chats with date/sender/media filters; OR fallback. |
 
 `chat` accepts `@username`, `https://t.me/...` links, and numeric ids
-(`-100…` works).
+(`-100…` works); the same refs work in `chats=[…]` for `tg_search_index`.
 
 Typical agent flow:
 
@@ -190,6 +192,16 @@ tg_find_chats("quant trading")        → ref: @quant_channel
 tg_search_messages("@quant_channel", "backtest Sharpe")
 tg_get_messages("@quant_channel", around_id=1234, limit=20)   → context
 ```
+
+The server's instructions teach the agent a few loops that keyword search
+cannot do on its own:
+
+| Question | Calls |
+| --- | --- |
+| Who asked X and got no reply? | `tg_search_messages` → `tg_get_messages(around_id=…)` → check `reply_to` |
+| Which chats went quiet? | `tg_find_chats(scope="dialogs", sort="activity")` → filter `last_message_date` |
+| Who is in both groups? | `tg_get_chat_members` per chat → intersect `user_id` |
+| What happened across support chats? | `tg_search_index(chats=[…], min_date=…)` → group and dedupe by `link` |
 
 Everything is read-only: there is no code path that sends, edits, deletes,
 joins or leaves a chat.
@@ -202,7 +214,18 @@ histories you query repeatedly, or for offline search:
 ```
 tg_index_chat("@big_channel", limit=20000)   # incremental on later runs
 tg_search_index("шарп коэффициент")          # prefix match, Russian-friendly
+tg_search_index("шарп цена", chats=["@big_channel", "@deals"], min_date="2026-01-01")
 ```
+
+`tg_search_index` searches **all indexed chats** unless you pass `chat` or
+`chats`, and filters by date range, sender, media and topic. With
+`sort="relevance"` results are BM25-ranked, with `sort="date"` newest first.
+When an AND query matches nothing, it retries with OR and sets
+`relaxed: true` — the caller must treat those hits as partial.
+
+The index also stores `reply_to`, so "questions without answers" can be
+computed offline: find candidate messages, then check whether any indexed
+message replies to them.
 
 The index lives in `$XDG_DATA_HOME/tgsearch-mcp/index.sqlite3`
 (`~/.local/share/tgsearch-mcp/index.sqlite3`) and stores message text.
@@ -222,6 +245,30 @@ values are ignored):
 
 `TGSEARCH_HOME` replaces both directories with a single one (handy for tests or
 a portable setup), and `TGSEARCH_INDEX` overrides just the index file.
+
+### Several accounts
+
+There is one session per process, by design: a second account is a second
+isolated home. Give each its own home and register two MCP servers in your
+client:
+
+```sh
+TGSEARCH_HOME=~/.tg-work tgsearch-mcp login
+TGSEARCH_HOME=~/.tg-personal tgsearch-mcp login
+```
+
+```json
+{
+  "mcpServers": {
+    "telegram-work": { "command": "tgsearch-mcp", "args": ["serve"], "env": { "TGSEARCH_HOME": "/home/me/.tg-work" } },
+    "telegram-personal": { "command": "tgsearch-mcp", "args": ["serve"], "env": { "TGSEARCH_HOME": "/home/me/.tg-personal" } }
+  }
+}
+```
+
+Each server has its own config, session and index; nothing is merged into one
+response unless the assistant decides to. Accounts are never mixed
+server-side.
 
 ## Configuration
 
@@ -272,6 +319,11 @@ Releases are tagged `vX.Y.Z` on `main`; `.github/workflows/release.yml` verifies
 the tag and publishes to PyPI via trusted publishing.
 
 ## Security
+
+This server runs **locally over stdio**: your Telegram data goes from
+Telegram to your machine and then to the model provider you already use. There
+is no hosted copy, no account to register and no OAuth token — unlike hosted
+Telegram MCP services, which necessarily see the messages server-side.
 
 The session string is a **full credential for your Telegram account** — anyone
 who has it can act as you. It is stored with mode `0600` under

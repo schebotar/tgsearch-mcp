@@ -47,10 +47,12 @@ def test_docs_have_no_duplicate_or_missing_tools():
 
 
 def test_verify_expected_tools_matches_catalog():
-    source = (ROOT / "scripts" / "verify.py").read_text(encoding="utf-8")
-    match = re.search(r"^EXPECTED_TOOLS\s*=\s*(\d+)\s*$", source, re.MULTILINE)
-    assert match, "EXPECTED_TOOLS не найден в scripts/verify.py"
-    assert int(match.group(1)) == len(catalog())
+    expected = len(catalog())
+    for name in ("verify.py", "smoke.py"):
+        source = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+        match = re.search(r"^EXPECTED_TOOLS\s*=\s*(\d+)\s*$", source, re.MULTILINE)
+        assert match, f"EXPECTED_TOOLS не найден в scripts/{name}"
+        assert int(match.group(1)) == expected, name
 
 
 if __name__ == "__main__":

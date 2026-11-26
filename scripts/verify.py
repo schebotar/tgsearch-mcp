@@ -23,7 +23,7 @@ import sys
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-EXPECTED_TOOLS = 9
+EXPECTED_TOOLS = 11
 
 
 def show(title: str, payload) -> None:

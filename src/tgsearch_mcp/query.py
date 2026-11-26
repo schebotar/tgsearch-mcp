@@ -11,6 +11,8 @@ def build_fts_query(query: str, mode: str = "auto") -> str:
 
     ``auto`` treats every word as a prefix match and joins terms with AND,
     which makes Russian/English inflection work without a stemmer.
+    ``any`` is the same but joins terms with OR: useful when AND returns
+    nothing and a partial match is better than none.
     ``raw`` passes the query through for power users who know FTS5 syntax.
     """
     query = (query or "").strip()
@@ -18,8 +20,8 @@ def build_fts_query(query: str, mode: str = "auto") -> str:
         raise ValueError("empty search query")
     if mode == "raw":
         return query
-    if mode != "auto":
-        raise ValueError("mode must be 'auto' or 'raw'")
+    if mode not in {"auto", "any"}:
+        raise ValueError("mode must be 'auto', 'any' or 'raw'")
 
     parts: list[str] = []
     for match in _TOKEN_RE.finditer(query):
@@ -33,4 +35,4 @@ def build_fts_query(query: str, mode: str = "auto") -> str:
                 parts.append(f'"{token}"*')
     if not parts:
         raise ValueError("query has no searchable words")
-    return " AND ".join(parts)
+    return (" OR " if mode == "any" else " AND ").join(parts)

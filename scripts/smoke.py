@@ -24,7 +24,7 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_TOOLS = 9
+EXPECTED_TOOLS = 11
 
 
 def clean_env(home: str) -> dict[str, str]:

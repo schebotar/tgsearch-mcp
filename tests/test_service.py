@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
-from telethon import types, utils
+from telethon import errors, types, utils
 from telethon.tl.types import messages
 
 from tgsearch_mcp.config import Config
@@ -256,3 +257,209 @@ async def test_find_chats_scope_dialogs_filters_out_non_matches(index):
 
     assert result["chats"] == []
     assert "No chats matched" in result["note"]
+
+
+async def test_find_chats_exposes_activity_and_filters_quiet_chats(index):
+    channel = make_channel()
+    quiet = make_channel(id=222, title="Quiet", username="quiet")
+    now = datetime.now(timezone.utc)
+    service = FakeDialogsService(
+        index,
+        channel,
+        [],
+        dialogs=[
+            (FakeDialog(channel, date=now - timedelta(days=1)), False),
+            (FakeDialog(quiet, date=now - timedelta(days=120)), False),
+        ],
+    )
+
+    active = await service.find_chats("", scope="dialogs", active_within_days=30)
+    assert [chat["ref"] for chat in active["chats"]] == ["@quant"]
+    assert active["chats"][0]["last_message_date"]
+    assert active["active_within_days"] == 30
+
+    recent = await service.find_chats("", scope="dialogs", sort="activity")
+    assert [chat["ref"] for chat in recent["chats"]] == ["@quant", "@quiet"]
+    assert recent["sort"] == "activity"
+
+
+async def test_find_chats_rejects_unknown_sort(index):
+    service = FakeDialogsService(index, make_channel(), [], dialogs=[])
+    with pytest.raises(TgSearchError) as excinfo:
+        await service.find_chats("", sort="newest")
+    assert excinfo.value.code == "invalid_argument"
+
+
+async def test_chat_members_lists_supergroup_participants(index):
+    channel = make_channel()
+    user = make_user()
+    creator = make_user(id=777, first_name="Alice", username="alice")
+    participants = types.channels.ChannelParticipants(
+        count=2,
+        participants=[
+            types.ChannelParticipant(user_id=555, date=None),
+            types.ChannelParticipantCreator(user_id=777, admin_rights=types.ChatAdminRights()),
+        ],
+        chats=[],
+        users=[user, creator],
+    )
+    service = FakeService(index, channel, [participants])
+
+    result = await service.chat_members("@quant", limit=10)
+
+    assert result["ok"] is True
+    assert result["count"] == 2
+    assert result["total"] == 2
+    assert result["members"][0]["name"] == "Bob"
+    assert "role" not in result["members"][0]
+    assert result["members"][1]["role"] == "creator"
+    assert result["members"][1]["username"] == "alice"
+    assert "next_offset" not in result
+
+
+async def test_chat_members_reports_hidden_list(index):
+    service = FailingService(
+        index, make_channel(), errors.ChatAdminRequiredError(request=None)
+    )
+
+    result = await service.chat_members("@quant")
+
+    assert result["ok"] is True
+    assert result["participants_hidden"] is True
+    assert result["members"] == []
+
+
+class FakeFullChat:
+    """Minimal stand-in for messages.ChatFull responses."""
+
+    def __init__(self, participants, users=None):
+        self.full_chat = SimpleNamespace(participants=participants)
+        self.users = users or []
+        self.chats = []
+
+
+class FailingService(FakeService):
+    def __init__(self, index, entity, exc):
+        super().__init__(index, entity, [])
+        self.exc = exc
+
+    async def _run(self, factory, timeout=None):
+        raise self.exc
+
+
+async def test_chat_members_lists_basic_group(index):
+    group = types.Chat(
+        id=222,
+        title="Team",
+        photo=types.ChatPhotoEmpty(),
+        participants_count=2,
+        date=None,
+        version=1,
+    )
+    full = FakeFullChat(
+        types.ChatParticipants(
+            chat_id=222,
+            participants=[
+                types.ChatParticipant(user_id=555, inviter_id=777, date=None),
+                types.ChatParticipantCreator(user_id=777),
+            ],
+            version=1,
+        ),
+        users=[make_user(), make_user(id=777, first_name="Alice")],
+    )
+    service = FakeService(index, group, [full])
+
+    result = await service.chat_members("222", query="bob")
+
+    assert result["total"] == 1
+    assert result["members"] == [{"user_id": 555, "name": "Bob"}]
+
+
+async def test_list_contacts_filters_and_hides_phones(index):
+    user = make_user(phone="+10000000000", username="bobby")
+
+    service = FakeService(
+        index,
+        make_channel(),
+        [
+            types.contacts.Contacts(
+                contacts=[types.Contact(user_id=555, mutual=False)],
+                saved_count=1,
+                users=[user],
+            )
+        ],
+    )
+    result = await service.list_contacts(query="bob")
+    assert result["total"] == 1
+    assert result["contacts"][0]["name"] == "Bob"
+    assert "phone" not in result["contacts"][0]
+
+    with_phones = FakeService(
+        index,
+        make_channel(),
+        [types.contacts.Contacts(contacts=[], saved_count=1, users=[user])],
+    )
+    result = await with_phones.list_contacts(include_phones=True)
+    assert result["contacts"][0]["phone"] == "+10000000000"
+
+
+async def test_index_search_relaxes_to_or_and_reports_it(index):
+    index.upsert_messages(
+        [
+            dict(
+                chat_id=-100111,
+                msg_id=1,
+                date=1735689600,
+                sender_id=None,
+                sender_name=None,
+                text="alpha beta",
+                has_media=0,
+                topic_id=None,
+            )
+        ]
+    )
+    service = FakeService(index, make_channel(), [])
+
+    result = await service.index_search("alpha gamma")
+
+    assert result["relaxed"] is True
+    assert result["returned"] == 1
+    assert "OR-matched" in result["note"]
+
+
+class OfflineService(FakeService):
+    async def resolve(self, ref, refresh=False):
+        raise RuntimeError("offline")
+
+
+async def test_index_search_filters_by_chats_offline(index):
+    index.upsert_chat(-100111, "A", "a", "channel")
+    index.upsert_chat(-100222, "B", "b", "channel")
+    rows = [
+        dict(
+            chat_id=chat,
+            msg_id=1,
+            date=1735689600,
+            sender_id=None,
+            sender_name=None,
+            text="needle",
+            has_media=0,
+            topic_id=None,
+        )
+        for chat in (-100111, -100222)
+    ]
+    index.upsert_messages(rows)
+    service = OfflineService(index, make_channel(), [])
+
+    result = await service.index_search("needle", chats=["-100222", "missing"])
+
+    assert [item["chat_id"] for item in result["results"]] == [-100222]
+    assert result["unresolved_chats"] == ["missing"]
+    assert "chat" not in result
+
+
+async def test_index_search_rejects_unknown_chats(index):
+    service = OfflineService(index, make_channel(), [])
+    with pytest.raises(TgSearchError) as excinfo:
+        await service.index_search("needle", chats=["telegram"])
+    assert excinfo.value.code == "chat_not_found"

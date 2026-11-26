@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS messages (
     text TEXT NOT NULL DEFAULT '',
     has_media INTEGER NOT NULL DEFAULT 0,
     topic_id INTEGER,
+    reply_to_msg_id INTEGER,
     UNIQUE(chat_id, msg_id)
 );
 CREATE INDEX IF NOT EXISTS messages_chat_date ON messages(chat_id, date);
@@ -66,6 +67,9 @@ class MessageIndex:
         self._lock = threading.RLock()
         self._db = sqlite3.connect(str(self.path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
+        self._db.create_function(
+            "pylower", 1, lambda value: (value or "").lower(), deterministic=True
+        )
         for target, mode in ((self.path.parent, 0o700), (self.path, 0o600)):
             try:
                 os.chmod(target, mode)
@@ -77,6 +81,7 @@ class MessageIndex:
                 self._db.execute("PRAGMA synchronous=NORMAL")
                 self._db.execute("PRAGMA busy_timeout=5000")
                 self._db.executescript(SCHEMA)
+                self._migrate()
                 self._db.commit()
         except sqlite3.OperationalError as exc:
             raise TgSearchError(
@@ -88,6 +93,14 @@ class MessageIndex:
     def close(self) -> None:
         with self._lock:
             self._db.close()
+
+    def _migrate(self) -> None:
+        """Bring an index created by an older version up to the current schema."""
+        columns = {
+            row[1] for row in self._db.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        if "reply_to_msg_id" not in columns:
+            self._db.execute("ALTER TABLE messages ADD COLUMN reply_to_msg_id INTEGER")
 
     def upsert_chat(self, chat_id: int, title: str | None, username: str | None, kind: str | None) -> None:
         with self._lock, self._db:
@@ -105,25 +118,37 @@ class MessageIndex:
             )
 
     def upsert_messages(self, rows: Iterable[dict[str, Any]]) -> int:
-        rows = list(rows)
-        if not rows:
+        keys = (
+            "chat_id",
+            "msg_id",
+            "date",
+            "sender_id",
+            "sender_name",
+            "text",
+            "has_media",
+            "topic_id",
+            "reply_to_msg_id",
+        )
+        prepared = [{key: row.get(key) for key in keys} for row in rows]
+        if not prepared:
             return 0
         with self._lock, self._db:
             self._db.executemany(
                 """
-                INSERT INTO messages(chat_id, msg_id, date, sender_id, sender_name, text, has_media, topic_id)
-                VALUES (:chat_id, :msg_id, :date, :sender_id, :sender_name, :text, :has_media, :topic_id)
+                INSERT INTO messages(chat_id, msg_id, date, sender_id, sender_name, text, has_media, topic_id, reply_to_msg_id)
+                VALUES (:chat_id, :msg_id, :date, :sender_id, :sender_name, :text, :has_media, :topic_id, :reply_to_msg_id)
                 ON CONFLICT(chat_id, msg_id) DO UPDATE SET
                     date = excluded.date,
                     sender_id = excluded.sender_id,
                     sender_name = excluded.sender_name,
                     text = excluded.text,
                     has_media = excluded.has_media,
-                    topic_id = excluded.topic_id
+                    topic_id = excluded.topic_id,
+                    reply_to_msg_id = excluded.reply_to_msg_id
                 """,
-                rows,
+                prepared,
             )
-        return len(rows)
+        return len(prepared)
 
     def delete_chat(self, chat_id: int) -> None:
         with self._lock, self._db:
@@ -187,13 +212,22 @@ class MessageIndex:
         query: str,
         *,
         chat_id: int | None = None,
+        chat_ids: list[int] | None = None,
         limit: int = 20,
         mode: str = "auto",
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+        sender: str | None = None,
+        has_media: bool = False,
+        topic_id: int | None = None,
+        sort: str = "relevance",
     ) -> list[dict[str, Any]]:
+        if sort not in {"relevance", "date"}:
+            raise ValueError("sort must be 'relevance' or 'date'")
         match = build_fts_query(query, mode)
         sql = """
             SELECT m.chat_id, m.msg_id, m.date, m.sender_name, m.topic_id, m.has_media,
-                   c.title AS chat_title, c.username AS chat_username,
+                   m.reply_to_msg_id, c.title AS chat_title, c.username AS chat_username,
                    snippet(messages_fts, 0, '**', '**', '…', 24) AS snippet,
                    bm25(messages_fts) AS score
             FROM messages_fts
@@ -205,7 +239,31 @@ class MessageIndex:
         if chat_id is not None:
             sql += " AND m.chat_id = ?"
             params.append(int(chat_id))
-        sql += " ORDER BY score LIMIT ?"
+        elif chat_ids:
+            placeholders = ", ".join("?" for _ in chat_ids)
+            sql += f" AND m.chat_id IN ({placeholders})"
+            params.extend(int(value) for value in chat_ids)
+        if min_ts is not None:
+            sql += " AND m.date >= ?"
+            params.append(int(min_ts))
+        if max_ts is not None:
+            sql += " AND m.date <= ?"
+            params.append(int(max_ts))
+        if sender:
+            text = str(sender).strip()
+            if text.lstrip("-").isdigit():
+                sql += " AND m.sender_id = ?"
+                params.append(int(text))
+            else:
+                sql += " AND instr(pylower(m.sender_name), ?) > 0"
+                params.append(text.lower())
+        if has_media:
+            sql += " AND m.has_media = 1"
+        if topic_id is not None:
+            sql += " AND m.topic_id = ?"
+            params.append(int(topic_id))
+        sql += " ORDER BY m.date DESC, m.msg_id DESC" if sort == "date" else " ORDER BY score"
+        sql += " LIMIT ?"
         params.append(max(1, int(limit)))
         with self._lock:
             rows = self._db.execute(sql, params).fetchall()
@@ -224,6 +282,8 @@ class MessageIndex:
                 item["topic_id"] = row["topic_id"]
             if row["has_media"]:
                 item["has_media"] = True
+            if row["reply_to_msg_id"]:
+                item["reply_to"] = row["reply_to_msg_id"]
             link = message_link(row["chat_id"], row["chat_username"], row["msg_id"], row["topic_id"])
             if link:
                 item["link"] = link
